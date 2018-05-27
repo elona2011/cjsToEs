@@ -1,8 +1,10 @@
 const estraverse = require('estraverse')
 
+let nameIndex = 10000
 exports.transform = function(tree) {
   let exportsNames = []
 
+  tree.sourceType = 'module'
   estraverse.replace(tree, {
     enter(node, parent) {
       // edit require
@@ -23,15 +25,27 @@ exports.transform = function(tree) {
         node.declarations[0].init.arguments[0].value &&
         node.declarations[0].init.arguments[0].raw
       ) {
-        return {
-          type: 'ImportDeclaration',
-          specifiers: [
-            {
-              type: 'ImportDefaultSpecifier',
-              local: node.declarations[0].id,
-            },
-          ],
-          source: node.declarations[0].init.arguments[0],
+        let name = node.declarations[0].id.name
+
+        let nameArr = Object.entries(getAllProperties(tree, name))
+        if (nameArr.length) {
+          return {
+            type: 'ImportDeclaration',
+            specifiers: nameArr.map(n => ({
+              type: 'ImportSpecifier',
+              local: {
+                type: 'Identifier',
+                name: n[1],
+              },
+              imported: {
+                type: 'Identifier',
+                name: n[0],
+              },
+            })),
+            source: node.declarations[0].init.arguments[0],
+          }
+        } else {
+          this.remove()
         }
       }
 
@@ -47,12 +61,17 @@ exports.transform = function(tree) {
         node.expression.left.object.name === 'module' &&
         node.expression.left.property.type === 'Identifier' &&
         node.expression.left.property.name === 'exports' &&
-        node.expression.right.type === 'ObjectExpression' &&
-        node.expression.right.properties.length
+        node.expression.right.type === 'ObjectExpression'
       ) {
         return {
-          type: 'ExportDefaultDeclaration',
-          declaration: node.expression.right,
+          type: 'ExportNamedDeclaration',
+          declaration: null,
+          source: null,
+          specifiers: node.expression.right.properties.map(n => ({
+            type: 'ExportSpecifier',
+            exported: n.value,
+            local: n.value,
+          })),
         }
       }
 
@@ -90,30 +109,51 @@ exports.transform = function(tree) {
       enter(node, parent) {
         if (node.type === 'Program') {
           node.body.push({
-            type: 'ExportDefaultDeclaration',
-            declaration: {
-              type: 'ObjectExpression',
-              properties: exportsNames.map(n => {
-                return {
-                  type: 'Property',
-                  key: {
-                    type: 'Identifier',
-                    name: n,
-                  },
-                  computed: false,
-                  value: {
-                    type: 'Identifier',
-                    name: n,
-                  },
-                  kind: 'init',
-                  method: false,
-                  shorthand: false,
-                }
-              }),
-            },
+            type: 'ExportNamedDeclaration',
+            declaration: null,
+            source: null,
+            specifiers: exportsNames.map(n => ({
+              type: 'ExportSpecifier',
+              exported: {
+                type: 'Identifier',
+                name: n,
+              },
+              local: {
+                type: 'Identifier',
+                name: n,
+              },
+            })),
           })
         }
       },
     })
   }
+}
+
+const getAllProperties = (tree, name) => {
+  let r = {}
+  estraverse.replace(tree, {
+    enter(node, parent) {
+      if (
+        node.type === 'MemberExpression' &&
+        node.object.type === 'Identifier' &&
+        node.object.name === name
+      ) {
+        let newName,
+          propertyName = node.property.name || node.property.value
+          
+        if (r[propertyName]) {
+          newName = r[propertyName]
+        } else {
+          newName = propertyName + nameIndex++
+        }
+        r[propertyName] = newName
+        return {
+          type: 'Identifier',
+          name: newName,
+        }
+      }
+    },
+  })
+  return r
 }
